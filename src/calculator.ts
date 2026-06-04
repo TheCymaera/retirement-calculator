@@ -1,6 +1,6 @@
-export type FundId = string;
+export type SecurityId = string;
 
-export type Fund = {
+export type Security = {
 	symbol: string;
 	name: string;
 	annualReturn: number;
@@ -10,7 +10,7 @@ export type Fund = {
 };
 
 export type Holding = {
-	fundId: FundId;
+	securityId: SecurityId;
 	startWeight: number;
 	endWeight: number;
 };
@@ -27,11 +27,11 @@ export type Scenario = {
 	assumeRebalanceSalesAreLongTerm: boolean;
 	rebalanceEveryNYears: number;
 	holdings: Holding[];
-	funds: Record<FundId, Fund>;
+	securities: Record<SecurityId, Security>;
 };
 
 type PositionState = {
-	fundId: FundId;
+	securityId: SecurityId;
 	value: number;
 	costBasis: number;
 	feesPaid: number;
@@ -82,7 +82,7 @@ export function validateScenario(scenario: Scenario): void {
 
 export function simulateScenario(scenario: Scenario): YearRow[] {
 	const positions = scenario.holdings.map<PositionState>((holding) => ({
-		fundId: holding.fundId,
+		securityId: holding.securityId,
 		value: 0,
 		costBasis: 0,
 		feesPaid: 0,
@@ -164,15 +164,15 @@ function applyAnnualReturnsAndTaxes(
 	let annualCapitalGainsDistributionTaxes = 0;
 
 	for (const position of positions) {
-		const fund = scenario.funds[position.fundId];
+		const security = scenario.securities[position.securityId];
 		const openingValue = position.value;
-		const dividendAmount = openingValue * fund.dividendYield;
+		const dividendAmount = openingValue * security.dividendYield;
 		const capitalGainsDistributionAmount =
-			openingValue * fund.capitalGainsDistributionYield;
+			openingValue * security.capitalGainsDistributionYield;
 		const priceReturnRate =
-			fund.annualReturn - fund.dividendYield - fund.capitalGainsDistributionYield;
+			security.annualReturn - security.dividendYield - security.capitalGainsDistributionYield;
 		const priceAppreciationAmount = openingValue * priceReturnRate;
-		const estimatedFee = openingValue * (1 + fund.annualReturn / 2) * fund.expenseRatio;
+		const estimatedFee = openingValue * (1 + security.annualReturn / 2) * security.expenseRatio;
 
 		const dividendTax = dividendAmount * scenario.dividendTaxRate;
 		const capitalGainsDistributionTax =
@@ -262,7 +262,7 @@ export function printScenario(scenario: Scenario, rows: YearRow[]): void {
 	}
 	console.log("Holdings:");
 	for (const holding of scenario.holdings) {
-		console.log(`  - ${describeHolding(holding, scenario.funds[holding.fundId])}`);
+		console.log(`  - ${describeHolding(holding, scenario.securities[holding.securityId])}`);
 	}
 	console.table(
 		rows.map((row) => ({
@@ -284,18 +284,18 @@ export function htmlScenario(scenario: Scenario, rows: YearRow[]): string {
 		.join("");
 	const holdings = scenario.holdings
 		.map((holding) => {
-			const fund = scenario.funds[holding.fundId];
+			const security = scenario.securities[holding.securityId];
 			const startWeight = holding.startWeight;
 			const endWeight = holding.endWeight;
 			return `<tr>
-<td>${escapeHtml(fund.symbol)}</td>
-<td>${escapeHtml(fund.name)}</td>
+<td>${escapeHtml(security.symbol)}</td>
+<td>${escapeHtml(security.name)}</td>
 	<td>${formatPercent(startWeight)}</td>
 	<td>${formatPercent(endWeight)}</td>
-<td>${formatPercent(fund.annualReturn)}</td>
-<td>${formatPercent(fund.expenseRatio)}</td>
-<td>${formatPercent(fund.dividendYield)}</td>
-<td>${formatPercent(fund.capitalGainsDistributionYield)}</td>
+<td>${formatPercent(security.annualReturn)}</td>
+<td>${formatPercent(security.expenseRatio)}</td>
+<td>${formatPercent(security.dividendYield)}</td>
+<td>${formatPercent(security.capitalGainsDistributionYield)}</td>
 </tr>`;
 		})
 		.join("");
@@ -303,7 +303,7 @@ export function htmlScenario(scenario: Scenario, rows: YearRow[]): string {
 	const header = `<h2>${escapeHtml(scenario.name)}</h2>
 <h3>Scenario Details</h3>
 <ul>${details}</ul>
-<h3>Fund Allocation</h3>
+<h3>Allocation</h3>
 <table>
 <tr>
 <th>Symbol</th>
@@ -391,14 +391,14 @@ function buildScenarioDetailLines(scenario: Scenario): string[] {
 	];
 }
 
-function describeHolding(holding: Holding, fund: Fund): string {
+function describeHolding(holding: Holding, security: Security): string {
 	const start = holding.startWeight;
 	const end = holding.endWeight;
 	const weightText = start === end
 		? `weight ${formatPercent(start)}`
 		: `weight ${formatPercent(start)} -> ${formatPercent(end)}`;
 
-	return `${fund.symbol} (${fund.name}) | ${weightText} | return ${formatPercent(fund.annualReturn)} | expense ${formatPercent(fund.expenseRatio)} | dividend ${formatPercent(fund.dividendYield)} | cap gains dist ${formatPercent(fund.capitalGainsDistributionYield)}`;
+	return `${security.symbol} (${security.name}) | ${weightText} | return ${formatPercent(security.annualReturn)} | expense ${formatPercent(security.expenseRatio)} | dividend ${formatPercent(security.dividendYield)} | cap gains dist ${formatPercent(security.capitalGainsDistributionYield)}`;
 }
 
 function getTargetWeightsForYear(scenario: Scenario, yearOffset: number): number[] {

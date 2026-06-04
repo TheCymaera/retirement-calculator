@@ -1,6 +1,6 @@
-import { htmlScenario, htmlStyles, printScenario, simulateScenario, validateScenario, type Fund, type Scenario } from "./calculator";
+import { htmlScenario, htmlStyles, printScenario, simulateScenario, validateScenario, type Security, type Scenario } from "./calculator";
 
-const funds = {
+const securities = {
 	VLXVX: {
 		symbol: "VLXVX",
 		name: "Vanguard Target Retirement Fund",
@@ -49,7 +49,7 @@ const funds = {
 		dividendYield: 0.028,
 		capitalGainsDistributionYield: 0.0,
 	},
-} satisfies Record<string, Fund>;
+} satisfies Record<string, Security>;
 
 const scenarios = [
 	{
@@ -64,9 +64,9 @@ const scenarios = [
 		assumeRebalanceSalesAreLongTerm: true,
 		rebalanceEveryNYears: Number.POSITIVE_INFINITY,
 		holdings: [
-			{ fundId: funds.VLXVX.symbol, startWeight: 1, endWeight: 1 },
+			{ securityId: securities.VLXVX.symbol, startWeight: 1, endWeight: 1 },
 		],
-		funds: funds,
+		securities: securities,
 	},
 	{
 		name: "Portfolio With Manual Rebalance",
@@ -80,12 +80,12 @@ const scenarios = [
 		assumeRebalanceSalesAreLongTerm: true,
 		rebalanceEveryNYears: 5,
 		holdings: [
-			{ fundId: funds.VOO.symbol, startWeight: 0.5, endWeight: 0.3 },
-			{ fundId: funds.VXUS.symbol, startWeight: 0.3, endWeight: 0.15 },
-			{ fundId: funds.BND.symbol, startWeight: 0.15, endWeight: 0.35 },
-			{ fundId: funds.BNDX.symbol, startWeight: 0.05, endWeight: 0.2 },
+			{ securityId: securities.VOO.symbol, startWeight: 0.5, endWeight: 0.3 },
+			{ securityId: securities.VXUS.symbol, startWeight: 0.3, endWeight: 0.15 },
+			{ securityId: securities.BND.symbol, startWeight: 0.15, endWeight: 0.35 },
+			{ securityId: securities.BNDX.symbol, startWeight: 0.05, endWeight: 0.2 },
 		],
-		funds: funds,
+		securities: securities,
 	},
 ] satisfies Scenario[];
 
