@@ -11,7 +11,8 @@ export type Fund = {
 
 export type Holding = {
 	fundId: FundId;
-	targetWeight: number;
+	startWeight: number;
+	endWeight: number;
 };
 
 export type Scenario = {
@@ -54,11 +55,18 @@ function sumArray(numbers: number[]): number {
 }
 
 export function validateScenario(scenario: Scenario): void {
-	const totalWeight = sumArray(scenario.holdings.map((holding) => holding.targetWeight));
+	const totalStartWeight = sumArray(scenario.holdings.map(holding => holding.startWeight));
+	const totalEndWeight = sumArray(scenario.holdings.map(holding => holding.endWeight));
 
-	if (Math.abs(totalWeight - 1) > 0.000001) {
+	if (Math.abs(totalStartWeight - 1) > 0.000001) {
 		throw new Error(
-			`${scenario.name}: holding weights must sum to 1.0, got ${totalWeight.toFixed(6)}`,
+			`${scenario.name}: start weights must sum to 1.0, got ${totalStartWeight.toFixed(6)}`,
+		);
+	}
+
+	if (Math.abs(totalEndWeight - 1) > 0.000001) {
+		throw new Error(
+			`${scenario.name}: end weights must sum to 1.0, got ${totalEndWeight.toFixed(6)}`,
 		);
 	}
 
@@ -86,19 +94,20 @@ export function simulateScenario(scenario: Scenario): YearRow[] {
 
 	for (let yearOffset = 0; yearOffset < scenario.years; yearOffset += 1) {
 		const year = scenario.startYear + yearOffset;
+		const targetWeights = getTargetWeightsForYear(scenario, yearOffset);
 
 		if (scenario.contributionTiming === "start") {
-			contributeToTargets(positions, scenario.holdings, scenario.annualContribution);
+			contributeToTargets(positions, targetWeights, scenario.annualContribution);
 		}
 
 		const annual = applyAnnualReturnsAndTaxes(positions, scenario);
 
 		if (shouldRebalanceThisYear(yearOffset, scenario.rebalanceEveryNYears)) {
-			annual.rebalanceCapitalGainsTaxes += rebalancePortfolio(positions, scenario);
+			annual.rebalanceCapitalGainsTaxes += rebalancePortfolio(positions, targetWeights, scenario);
 		}
 
 		if (scenario.contributionTiming === "end") {
-			contributeToTargets(positions, scenario.holdings, scenario.annualContribution);
+			contributeToTargets(positions, targetWeights, scenario.annualContribution);
 		}
 
 		const cumulativeFees = sumArray(positions.map(position => position.feesPaid));
@@ -131,11 +140,11 @@ function shouldRebalanceThisYear(yearOffset: number, rebalanceEveryNYears: numbe
 
 function contributeToTargets(
 	positions: PositionState[],
-	holdings: Holding[],
+	targetWeights: number[],
 	annualContribution: number,
 ): void {
-	for (let index = 0; index < holdings.length; index += 1) {
-		const contribution = annualContribution * holdings[index].targetWeight;
+	for (let index = 0; index < targetWeights.length; index += 1) {
+		const contribution = annualContribution * targetWeights[index];
 		positions[index].value += contribution;
 		positions[index].costBasis += contribution;
 	}
@@ -193,7 +202,11 @@ function applyAnnualReturnsAndTaxes(
 	};
 }
 
-function rebalancePortfolio(positions: PositionState[], scenario: Scenario): number {
+function rebalancePortfolio(
+	positions: PositionState[],
+	targetWeights: number[],
+	scenario: Scenario,
+): number {
 	const totalValue = sumArray(positions.map(position => position.value));
 	if (totalValue <= 0) {
 		return 0;
@@ -203,7 +216,7 @@ function rebalancePortfolio(positions: PositionState[], scenario: Scenario): num
 
 	for (let index = 0; index < positions.length; index += 1) {
 		const position = positions[index];
-		const targetValue = totalValue * scenario.holdings[index].targetWeight;
+		const targetValue = totalValue * targetWeights[index];
 
 		if (position.value <= targetValue) {
 			continue;
@@ -229,7 +242,7 @@ function rebalancePortfolio(positions: PositionState[], scenario: Scenario): num
 	const postTaxTotal = sumArray(positions.map(position => position.value));
 	for (let index = 0; index < positions.length; index += 1) {
 		const position = positions[index];
-		const desiredValue = postTaxTotal * scenario.holdings[index].targetWeight;
+		const desiredValue = postTaxTotal * targetWeights[index];
 		if (desiredValue <= position.value) {
 			continue;
 		}
@@ -272,10 +285,13 @@ export function htmlScenario(scenario: Scenario, rows: YearRow[]): string {
 	const holdings = scenario.holdings
 		.map((holding) => {
 			const fund = scenario.funds[holding.fundId];
+			const startWeight = holding.startWeight;
+			const endWeight = holding.endWeight;
 			return `<tr>
 <td>${escapeHtml(fund.symbol)}</td>
 <td>${escapeHtml(fund.name)}</td>
-<td>${formatPercent(holding.targetWeight)}</td>
+	<td>${formatPercent(startWeight)}</td>
+	<td>${formatPercent(endWeight)}</td>
 <td>${formatPercent(fund.annualReturn)}</td>
 <td>${formatPercent(fund.expenseRatio)}</td>
 <td>${formatPercent(fund.dividendYield)}</td>
@@ -292,7 +308,8 @@ export function htmlScenario(scenario: Scenario, rows: YearRow[]): string {
 <tr>
 <th>Symbol</th>
 <th>Name</th>
-<th>Target Weight</th>
+<th>Start Weight</th>
+<th>End Weight</th>
 <th>Annual Return</th>
 <th>Expense Ratio</th>
 <th>Dividend Yield</th>
@@ -375,7 +392,23 @@ function buildScenarioDetailLines(scenario: Scenario): string[] {
 }
 
 function describeHolding(holding: Holding, fund: Fund): string {
-	return `${fund.symbol} (${fund.name}) | target ${formatPercent(holding.targetWeight)} | return ${formatPercent(fund.annualReturn)} | expense ${formatPercent(fund.expenseRatio)} | dividend ${formatPercent(fund.dividendYield)} | cap gains dist ${formatPercent(fund.capitalGainsDistributionYield)}`;
+	const start = holding.startWeight;
+	const end = holding.endWeight;
+	const weightText = start === end
+		? `weight ${formatPercent(start)}`
+		: `weight ${formatPercent(start)} -> ${formatPercent(end)}`;
+
+	return `${fund.symbol} (${fund.name}) | ${weightText} | return ${formatPercent(fund.annualReturn)} | expense ${formatPercent(fund.expenseRatio)} | dividend ${formatPercent(fund.dividendYield)} | cap gains dist ${formatPercent(fund.capitalGainsDistributionYield)}`;
+}
+
+function getTargetWeightsForYear(scenario: Scenario, yearOffset: number): number[] {
+	const ratio = scenario.years <= 1 ? 0 : yearOffset / (scenario.years - 1);
+
+	return scenario.holdings.map((holding) => {
+		const start = holding.startWeight;
+		const end = holding.endWeight;
+		return start + (end - start) * ratio;
+	});
 }
 
 function describeRebalancePolicy(rebalanceEveryNYears: number): string {

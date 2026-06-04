@@ -1,4 +1,4 @@
-import { htmlScenario, htmlStyles, printScenario, simulateScenario, validateScenario, type Scenario } from "./calculator";
+import { htmlScenario, htmlStyles, printScenario, simulateScenario, validateScenario, type Fund, type Scenario } from "./calculator";
 
 const funds = {
 	VLXVX: {
@@ -49,7 +49,7 @@ const funds = {
 		dividendYield: 0.028,
 		capitalGainsDistributionYield: 0.0,
 	},
-};
+} satisfies Record<string, Fund>;
 
 const scenarios = [
 	{
@@ -64,7 +64,7 @@ const scenarios = [
 		assumeRebalanceSalesAreLongTerm: true,
 		rebalanceEveryNYears: Number.POSITIVE_INFINITY,
 		holdings: [
-			{ fundId: funds.VLXVX.symbol, targetWeight: 1 }
+			{ fundId: funds.VLXVX.symbol, startWeight: 1, endWeight: 1 },
 		],
 		funds: funds,
 	},
@@ -80,14 +80,14 @@ const scenarios = [
 		assumeRebalanceSalesAreLongTerm: true,
 		rebalanceEveryNYears: 5,
 		holdings: [
-			{ fundId: funds.VOO.symbol, targetWeight: 0.45 },
-			{ fundId: funds.VXUS.symbol, targetWeight: 0.25 },
-			{ fundId: funds.BND.symbol, targetWeight: 0.2 },
-			{ fundId: funds.BNDX.symbol, targetWeight: 0.1 },
+			{ fundId: funds.VOO.symbol, startWeight: 0.5, endWeight: 0.3 },
+			{ fundId: funds.VXUS.symbol, startWeight: 0.3, endWeight: 0.15 },
+			{ fundId: funds.BND.symbol, startWeight: 0.15, endWeight: 0.35 },
+			{ fundId: funds.BNDX.symbol, startWeight: 0.05, endWeight: 0.2 },
 		],
 		funds: funds,
 	},
-] as Scenario[];
+] satisfies Scenario[];
 
 for (const scenario of scenarios) {
 	validateScenario(scenario);
