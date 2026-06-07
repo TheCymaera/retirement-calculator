@@ -3,16 +3,15 @@ export type SecurityId = string;
 export type Security = {
 	symbol: string;
 	name: string;
-	annualReturn: number;
+	annualReturn: (context: { year: number, progress: number }) => number;
 	expenseRatio: number;
-	dividendYield: number;
+	dividendYield: (context: { year: number, progress: number }) => number;
 	capitalGainsDistributionYield: number;
 };
 
 export type Holding = {
 	securityId: SecurityId;
-	startWeight: number;
-	endWeight: number;
+	weight: (context: { year: number, progress: number }) => number;
 };
 
 export type Scenario = {
@@ -55,8 +54,10 @@ function sumArray(numbers: number[]): number {
 }
 
 export function validateScenario(scenario: Scenario): void {
-	const totalStartWeight = sumArray(scenario.holdings.map(holding => holding.startWeight));
-	const totalEndWeight = sumArray(scenario.holdings.map(holding => holding.endWeight));
+	const startYear = scenario.startYear;
+	const endYear = scenario.startYear + scenario.years - 1;
+	const totalStartWeight = sumArray(scenario.holdings.map(holding => holding.weight({ year: startYear, progress: 0 })));
+	const totalEndWeight = sumArray(scenario.holdings.map(holding => holding.weight({ year: endYear, progress: 1 })));
 
 	if (Math.abs(totalStartWeight - 1) > 0.000001) {
 		throw new Error(
@@ -100,7 +101,7 @@ export function simulateScenario(scenario: Scenario): YearRow[] {
 			contributeToTargets(positions, targetWeights, scenario.annualContribution);
 		}
 
-		const annual = applyAnnualReturnsAndTaxes(positions, scenario);
+		const annual = applyAnnualReturnsAndTaxes(positions, scenario, year);
 
 		if (shouldRebalanceThisYear(yearOffset, scenario.rebalanceEveryNYears)) {
 			annual.rebalanceCapitalGainsTaxes += rebalancePortfolio(positions, targetWeights, scenario);
@@ -144,15 +145,16 @@ function contributeToTargets(
 	annualContribution: number,
 ): void {
 	for (let index = 0; index < targetWeights.length; index += 1) {
-		const contribution = annualContribution * targetWeights[index];
-		positions[index].value += contribution;
-		positions[index].costBasis += contribution;
+		const contribution = annualContribution * targetWeights[index]!;
+		positions[index]!.value += contribution;
+		positions[index]!.costBasis += contribution;
 	}
 }
 
 function applyAnnualReturnsAndTaxes(
 	positions: PositionState[],
 	scenario: Scenario,
+	year: number,
 ): {
 	fees: number;
 	dividendTaxes: number;
@@ -164,15 +166,18 @@ function applyAnnualReturnsAndTaxes(
 	let annualCapitalGainsDistributionTaxes = 0;
 
 	for (const position of positions) {
-		const security = scenario.securities[position.securityId];
+		const security = scenario.securities[position.securityId]!;
 		const openingValue = position.value;
-		const dividendAmount = openingValue * security.dividendYield;
+		const progress = (year - scenario.startYear) / (scenario.years - 1);
+		const annualReturn = security.annualReturn({ year, progress });
+		const dividendYield = security.dividendYield({ year, progress });
+		const dividendAmount = openingValue * dividendYield;
 		const capitalGainsDistributionAmount =
 			openingValue * security.capitalGainsDistributionYield;
 		const priceReturnRate =
-			security.annualReturn - security.dividendYield - security.capitalGainsDistributionYield;
+			annualReturn - dividendYield - security.capitalGainsDistributionYield;
 		const priceAppreciationAmount = openingValue * priceReturnRate;
-		const estimatedFee = openingValue * (1 + security.annualReturn / 2) * security.expenseRatio;
+		const estimatedFee = openingValue * (1 + annualReturn / 2) * security.expenseRatio;
 
 		const dividendTax = dividendAmount * scenario.dividendTaxRate;
 		const capitalGainsDistributionTax =
@@ -215,8 +220,8 @@ function rebalancePortfolio(
 	let totalRebalanceTaxes = 0;
 
 	for (let index = 0; index < positions.length; index += 1) {
-		const position = positions[index];
-		const targetValue = totalValue * targetWeights[index];
+		const position = positions[index]!;
+		const targetValue = totalValue * targetWeights[index]!;
 
 		if (position.value <= targetValue) {
 			continue;
@@ -241,8 +246,8 @@ function rebalancePortfolio(
 
 	const postTaxTotal = sumArray(positions.map(position => position.value));
 	for (let index = 0; index < positions.length; index += 1) {
-		const position = positions[index];
-		const desiredValue = postTaxTotal * targetWeights[index];
+		const position = positions[index]!;
+		const desiredValue = postTaxTotal * targetWeights[index]!;
 		if (desiredValue <= position.value) {
 			continue;
 		}
@@ -256,13 +261,15 @@ function rebalancePortfolio(
 }
 
 export function printScenario(scenario: Scenario, rows: YearRow[]): void {
+	const startYear = rows[0]!.year;
+	const endYear = rows[rows.length - 1]!.year;
 	console.log(`\n${scenario.name}`);
 	for (const line of buildScenarioDetailLines(scenario)) {
 		console.log(line);
 	}
 	console.log("Holdings:");
 	for (const holding of scenario.holdings) {
-		console.log(`  - ${describeHolding(holding, scenario.securities[holding.securityId])}`);
+		console.log(`  - ${describeHolding(holding, scenario.securities[holding.securityId]!, startYear, endYear)}`);
 	}
 	console.table(
 		rows.map((row) => ({
@@ -279,22 +286,37 @@ export function printScenario(scenario: Scenario, rows: YearRow[]): void {
 }
 
 export function htmlScenario(scenario: Scenario, rows: YearRow[]): string {
+	const startYear = rows[0]!.year;
+	const endYear = rows[rows.length - 1]!.year;
 	const details = buildScenarioDetailLines(scenario)
 		.map((line) => `<li>${escapeHtml(line)}</li>`)
 		.join("");
 	const holdings = scenario.holdings
 		.map((holding) => {
-			const security = scenario.securities[holding.securityId];
-			const startWeight = holding.startWeight;
-			const endWeight = holding.endWeight;
+			const security = scenario.securities[holding.securityId]!;
+			const startWeight = holding.weight({ year: startYear, progress: 0 });
+			const endWeight = holding.weight({ year: endYear, progress: 1 });
+			const weightText = Math.abs(startWeight - endWeight) < 0.000001
+				? formatPercent(startWeight)
+				: `${formatPercent(startWeight)} → ${formatPercent(endWeight)}`;
+			
+			const returnStart = security.annualReturn({ year: startYear, progress: 0 });
+			const returnEnd = security.annualReturn({ year: endYear, progress: 1 });
+			const returnText = Math.abs(returnStart - returnEnd) < 0.000001
+				? formatPercent(returnStart)
+				: `${formatPercent(returnStart)} → ${formatPercent(returnEnd)}`;
+			const dividendStart = security.dividendYield({ year: startYear, progress: 0 });
+			const dividendEnd = security.dividendYield({ year: endYear, progress: 1 });
+			const dividendText = Math.abs(dividendStart - dividendEnd) < 0.000001
+				? formatPercent(dividendStart)
+				: `${formatPercent(dividendStart)} → ${formatPercent(dividendEnd)}`;
 			return `<tr>
-<td>${escapeHtml(security.symbol)}</td>
-<td>${escapeHtml(security.name)}</td>
-	<td>${formatPercent(startWeight)}</td>
-	<td>${formatPercent(endWeight)}</td>
-<td>${formatPercent(security.annualReturn)}</td>
+<td style="text-align: left;">${escapeHtml(security.symbol)}</td>
+<td style="text-align: left;">${escapeHtml(security.name)}</td>
+<td>${weightText}</td>
+<td>${returnText}</td>
 <td>${formatPercent(security.expenseRatio)}</td>
-<td>${formatPercent(security.dividendYield)}</td>
+<td>${dividendText}</td>
 <td>${formatPercent(security.capitalGainsDistributionYield)}</td>
 </tr>`;
 		})
@@ -308,8 +330,7 @@ export function htmlScenario(scenario: Scenario, rows: YearRow[]): string {
 <tr>
 <th>Symbol</th>
 <th>Name</th>
-<th>Start Weight</th>
-<th>End Weight</th>
+<th>Weight</th>
 <th>Annual Return</th>
 <th>Expense Ratio</th>
 <th>Dividend Yield</th>
@@ -332,7 +353,7 @@ ${holdings}
 	const tableRows = rows
 		.map(
 			(row) => `<tr>
-<td>${row.year}</td>
+<td style="text-align: left;">${row.year}</td>
 <td>${formatCurrency(row.endingValue)}</td>
 <td>${formatCurrency(row.cumulativeFees)}</td>
 <td>${formatCurrency(row.cumulativeDividendTaxes)}</td>
@@ -352,6 +373,7 @@ table {
 	border-collapse: collapse;
 	width: 100%;
 	margin-bottom: 1rem;
+	text-wrap: nowrap;
 }
 th, td {
 	border: 1px solid #ddd;
@@ -365,11 +387,6 @@ th {
 body {
 	font-family: Arial, sans-serif;
 	padding: 20px;
-}
-
-th:first-child, td:first-child,
-th:nth-child(2), td:nth-child(2) {
-	text-align: left;
 }
 
 ul {
@@ -391,24 +408,30 @@ function buildScenarioDetailLines(scenario: Scenario): string[] {
 	];
 }
 
-function describeHolding(holding: Holding, security: Security): string {
-	const start = holding.startWeight;
-	const end = holding.endWeight;
-	const weightText = start === end
+function describeHolding(holding: Holding, security: Security, startYear: number, endYear: number): string {
+	const start = holding.weight({ year: startYear, progress: 0 });
+	const end = holding.weight({ year: endYear, progress: 1 });
+	const weightText = Math.abs(start - end) < 0.000001
 		? `weight ${formatPercent(start)}`
 		: `weight ${formatPercent(start)} -> ${formatPercent(end)}`;
+	const returnStart = security.annualReturn({ year: startYear, progress: 0 });
+	const returnEnd = security.annualReturn({ year: endYear, progress: 1 });
+	const returnText = Math.abs(returnStart - returnEnd) < 0.000001
+		? formatPercent(returnStart)
+		: `${formatPercent(returnStart)} -> ${formatPercent(returnEnd)}`;
+	const dividendStart = security.dividendYield({ year: startYear, progress: 0 });
+	const dividendEnd = security.dividendYield({ year: endYear, progress: 1 });
+	const dividendText = Math.abs(dividendStart - dividendEnd) < 0.000001
+		? formatPercent(dividendStart)
+		: `${formatPercent(dividendStart)} -> ${formatPercent(dividendEnd)}`;
 
-	return `${security.symbol} (${security.name}) | ${weightText} | return ${formatPercent(security.annualReturn)} | expense ${formatPercent(security.expenseRatio)} | dividend ${formatPercent(security.dividendYield)} | cap gains dist ${formatPercent(security.capitalGainsDistributionYield)}`;
+	return `${security.symbol} (${security.name}) | ${weightText} | return ${returnText} | expense ${formatPercent(security.expenseRatio)} | dividend ${dividendText} | cap gains dist ${formatPercent(security.capitalGainsDistributionYield)}`;
 }
 
 function getTargetWeightsForYear(scenario: Scenario, yearOffset: number): number[] {
-	const ratio = scenario.years <= 1 ? 0 : yearOffset / (scenario.years - 1);
-
-	return scenario.holdings.map((holding) => {
-		const start = holding.startWeight;
-		const end = holding.endWeight;
-		return start + (end - start) * ratio;
-	});
+	const year = scenario.startYear + yearOffset;
+	const progress = yearOffset / scenario.years;
+	return scenario.holdings.map((holding) => holding.weight({ year, progress }));
 }
 
 function describeRebalancePolicy(rebalanceEveryNYears: number): string {
