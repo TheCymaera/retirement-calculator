@@ -14,17 +14,29 @@ export type Holding = {
 	weight: (context: { year: number, progress: number }) => number;
 };
 
-export type Scenario = {
-	name: string;
+export type ScenarioTimeline = {
 	startYear: number;
 	years: number;
 	annualContribution: number;
 	contributionTiming: "start" | "end";
+	rebalanceEveryNYears: number;
+}
+
+export type ScenarioTax = {
 	dividendTaxRate: number;
-	longTermCapitalGainsTaxRate: number;
+	longTermCapitalGainsTax: (context: {
+		year: number;
+		progress: number;
+		realizedGains: number;
+	}) => number;
 	taxesPaidFromAccount: boolean;
 	assumeRebalanceSalesAreLongTerm: boolean;
-	rebalanceEveryNYears: number;
+}
+
+export type Scenario = {
+	name: string;
+	timeline: ScenarioTimeline;
+	tax: ScenarioTax;
 	holdings: Holding[];
 	securities: Record<SecurityId, Security>;
 };
@@ -54,8 +66,8 @@ function sumArray(numbers: number[]): number {
 }
 
 export function validateScenario(scenario: Scenario): void {
-	const startYear = scenario.startYear;
-	const endYear = scenario.startYear + scenario.years - 1;
+	const startYear = scenario.timeline.startYear;
+	const endYear = scenario.timeline.startYear + scenario.timeline.years - 1;
 	const totalStartWeight = sumArray(scenario.holdings.map(holding => holding.weight({ year: startYear, progress: 0 })));
 	const totalEndWeight = sumArray(scenario.holdings.map(holding => holding.weight({ year: endYear, progress: 1 })));
 
@@ -72,8 +84,8 @@ export function validateScenario(scenario: Scenario): void {
 	}
 
 	if (
-		scenario.rebalanceEveryNYears <= 0 ||
-		(Number.isFinite(scenario.rebalanceEveryNYears) && !Number.isInteger(scenario.rebalanceEveryNYears))
+		scenario.timeline.rebalanceEveryNYears <= 0 ||
+		(Number.isFinite(scenario.timeline.rebalanceEveryNYears) && !Number.isInteger(scenario.timeline.rebalanceEveryNYears))
 	) {
 		throw new Error(
 			`${scenario.name}: rebalanceEveryNYears must be a positive integer or Infinity.`,
@@ -93,22 +105,27 @@ export function simulateScenario(scenario: Scenario): YearRow[] {
 
 	const rows: YearRow[] = [];
 
-	for (let yearOffset = 0; yearOffset < scenario.years; yearOffset += 1) {
-		const year = scenario.startYear + yearOffset;
+	for (let yearOffset = 0; yearOffset < scenario.timeline.years; yearOffset += 1) {
+		const year = scenario.timeline.startYear + yearOffset;
+		const progress = progressForOffset(yearOffset, scenario.timeline.years);
 		const targetWeights = getTargetWeightsForYear(scenario, yearOffset);
 
-		if (scenario.contributionTiming === "start") {
-			contributeToTargets(positions, targetWeights, scenario.annualContribution);
+		if (scenario.timeline.contributionTiming === "start") {
+			contributeToTargets(positions, targetWeights, scenario.timeline.annualContribution);
 		}
 
-		const annual = applyAnnualReturnsAndTaxes(positions, scenario, year);
+		const annual = applyAnnualReturnsAndTaxes(positions, scenario, year, progress);
 
-		if (shouldRebalanceThisYear(yearOffset, scenario.rebalanceEveryNYears)) {
-			annual.rebalanceCapitalGainsTaxes += rebalancePortfolio(positions, targetWeights, scenario);
+		if (shouldRebalanceThisYear(yearOffset, scenario.timeline.rebalanceEveryNYears)) {
+			annual.rebalanceCapitalGainsTaxes += rebalancePortfolio(positions, targetWeights, scenario, year, progress);
 		}
 
-		if (scenario.contributionTiming === "end") {
-			contributeToTargets(positions, targetWeights, scenario.annualContribution);
+		if (scenario.timeline.contributionTiming === "end") {
+			contributeToTargets(positions, targetWeights, scenario.timeline.annualContribution);
+		}
+
+		if (yearOffset === scenario.timeline.years - 1) {
+			annual.rebalanceCapitalGainsTaxes += applyEndOfHorizonCapitalGainsTaxes(positions, scenario, year, progress);
 		}
 
 		const cumulativeFees = sumArray(positions.map(position => position.feesPaid));
@@ -155,6 +172,7 @@ function applyAnnualReturnsAndTaxes(
 	positions: PositionState[],
 	scenario: Scenario,
 	year: number,
+	progress: number,
 ): {
 	fees: number;
 	dividendTaxes: number;
@@ -168,7 +186,6 @@ function applyAnnualReturnsAndTaxes(
 	for (const position of positions) {
 		const security = scenario.securities[position.securityId]!;
 		const openingValue = position.value;
-		const progress = (year - scenario.startYear) / (scenario.years - 1);
 		const annualReturn = security.annualReturn({ year, progress });
 		const dividendYield = security.dividendYield({ year, progress });
 		const dividendAmount = openingValue * dividendYield;
@@ -179,14 +196,17 @@ function applyAnnualReturnsAndTaxes(
 		const priceAppreciationAmount = openingValue * priceReturnRate;
 		const estimatedFee = openingValue * (1 + annualReturn / 2) * security.expenseRatio;
 
-		const dividendTax = dividendAmount * scenario.dividendTaxRate;
-		const capitalGainsDistributionTax =
-			capitalGainsDistributionAmount * scenario.longTermCapitalGainsTaxRate;
+		const dividendTax = dividendAmount * scenario.tax.dividendTaxRate;
+		const capitalGainsDistributionTax = scenario.tax.longTermCapitalGainsTax({
+			year,
+			progress,
+			realizedGains: capitalGainsDistributionAmount,
+		});
 
 		position.value +=
 			dividendAmount + capitalGainsDistributionAmount + priceAppreciationAmount;
 
-		if (scenario.taxesPaidFromAccount) {
+		if (scenario.tax.taxesPaidFromAccount) {
 			position.value -= dividendTax + capitalGainsDistributionTax;
 		}
 
@@ -207,10 +227,44 @@ function applyAnnualReturnsAndTaxes(
 	};
 }
 
+function applyEndOfHorizonCapitalGainsTaxes(
+	positions: PositionState[],
+	scenario: Scenario,
+	year: number,
+	progress: number,
+): number {
+	let totalTaxes = 0;
+
+	for (const position of positions) {
+		const unrealizedGain = Math.max(0, position.value - position.costBasis);
+		if (unrealizedGain <= 0) {
+			continue;
+		}
+
+		const tax = scenario.tax.longTermCapitalGainsTax({
+			year,
+			progress,
+			realizedGains: unrealizedGain,
+		});
+		position.capitalGainsTaxesPaid += tax;
+		totalTaxes += tax;
+
+		if (scenario.tax.taxesPaidFromAccount) {
+			position.value -= tax;
+		}
+
+		position.costBasis = position.value;
+	}
+
+	return totalTaxes;
+}
+
 function rebalancePortfolio(
 	positions: PositionState[],
 	targetWeights: number[],
 	scenario: Scenario,
+	year: number,
+	progress: number,
 ): number {
 	const totalValue = sumArray(positions.map(position => position.value));
 	if (totalValue <= 0) {
@@ -229,9 +283,13 @@ function rebalancePortfolio(
 
 		const sellAmount = position.value - targetValue;
 		const gainRatio = position.value <= 0 ? 0 : Math.max(0, (position.value - position.costBasis) / position.value);
-		const realizedGain =
-			sellAmount * gainRatio * (scenario.assumeRebalanceSalesAreLongTerm ? 1 : 0);
-		const tax = realizedGain * scenario.longTermCapitalGainsTaxRate;
+		const realizedGain = !scenario.tax.assumeRebalanceSalesAreLongTerm ? 0 :
+			(sellAmount * gainRatio);
+		const tax = scenario.tax.longTermCapitalGainsTax({
+			year,
+			progress,
+			realizedGains: realizedGain,
+		});
 
 		const basisReductionRatio = sellAmount / position.value;
 		position.costBasis -= position.costBasis * basisReductionRatio;
@@ -239,7 +297,7 @@ function rebalancePortfolio(
 		position.capitalGainsTaxesPaid += tax;
 		totalRebalanceTaxes += tax;
 
-		if (scenario.taxesPaidFromAccount) {
+		if (scenario.tax.taxesPaidFromAccount) {
 			position.value -= tax;
 		}
 	}
@@ -283,6 +341,34 @@ export function printScenario(scenario: Scenario, rows: YearRow[]): void {
 			"LTCG Tax This Year": formatCurrency(row.annualCapitalGainsTaxes),
 		})),
 	);
+}
+
+export function htmlScenarios(options: { scenario: Scenario, rows: YearRow[] }[]) {
+	const html = options.map(i => htmlScenario(i.scenario, i.rows));
+
+	const tabs = `<ul class="tabs">` + options.map((i, index) => `<li><a href="#scenario-${index}">${escapeHtml(i.scenario.name)}</a></li>`).join("") + `</ul>`;
+
+	const js = `<script>
+		const loadTab = () => {
+			const hash = window.location.hash;
+			const match = hash.match(/scenario-(\\d+)/);
+			if (!match) return;
+			const index = parseInt(match[1], 10);
+			document.querySelectorAll('.scenario').forEach((el, i) => {
+				el.style.display = i === index ? 'block' : 'none';
+			});
+
+			
+			for (const anchor of document.querySelectorAll('a')) {
+				anchor.toggleAttribute("aria-current", anchor.href === location.href);
+			}
+		};
+
+		addEventListener('hashchange', loadTab);
+		loadTab();
+	</script>`;
+
+	return `${htmlStyles}${tabs}<div>${options.map((i) => `<div class="scenario" style="display: none;">${htmlScenario(i.scenario, i.rows)}</div>`).join("")}</div>${js}`;
 }
 
 export function htmlScenario(scenario: Scenario, rows: YearRow[]): string {
@@ -375,6 +461,7 @@ table {
 	margin-bottom: 1rem;
 	text-wrap: nowrap;
 }
+
 th, td {
 	border: 1px solid #ddd;
 	padding: 8px;
@@ -392,19 +479,30 @@ body {
 ul {
 	padding-left: 20px;
 }
+
+a[aria-current] {
+	color: rgb(115, 0, 0);
+	font-weight: bold;
+}
 </style>`;
 
 function buildScenarioDetailLines(scenario: Scenario): string[] {
+	const inferredCapitalGainsTax = inferCapitalGainsTaxDisplay(
+		scenario,
+		scenario.timeline.startYear,
+		scenario.timeline.startYear + scenario.timeline.years - 1,
+	);
+
 	return [
-		`Start year: ${scenario.startYear}`,
-		`Years: ${scenario.years}`,
-		`Annual contribution: ${formatCurrency(scenario.annualContribution)}`,
-		`Contribution timing: ${capitalize(scenario.contributionTiming)}`,
-		`Dividend tax rate: ${formatPercent(scenario.dividendTaxRate)}`,
-		`Long-term capital gains tax rate: ${formatPercent(scenario.longTermCapitalGainsTaxRate)}`,
-		`Taxes paid from account: ${formatBoolean(scenario.taxesPaidFromAccount)}`,
-		`Assume rebalance sales are long term: ${formatBoolean(scenario.assumeRebalanceSalesAreLongTerm)}`,
-		`Rebalance policy: ${describeRebalancePolicy(scenario.rebalanceEveryNYears)}`,
+		`Start year: ${scenario.timeline.startYear}`,
+		`Years: ${scenario.timeline.years}`,
+		`Annual contribution: ${formatCurrency(scenario.timeline.annualContribution)}`,
+		`Contribution timing: ${capitalize(scenario.timeline.contributionTiming)}`,
+		`Dividend tax rate: ${formatPercent(scenario.tax.dividendTaxRate)}`,
+		`Long-term capital gains tax: ${inferredCapitalGainsTax}`,
+		`Taxes paid from account: ${formatBoolean(scenario.tax.taxesPaidFromAccount)}`,
+		`Assume rebalance sales are long term: ${formatBoolean(scenario.tax.assumeRebalanceSalesAreLongTerm)}`,
+		`Rebalance policy: ${describeRebalancePolicy(scenario.timeline.rebalanceEveryNYears)}`,
 	];
 }
 
@@ -429,9 +527,61 @@ function describeHolding(holding: Holding, security: Security, startYear: number
 }
 
 function getTargetWeightsForYear(scenario: Scenario, yearOffset: number): number[] {
-	const year = scenario.startYear + yearOffset;
-	const progress = yearOffset / scenario.years;
+	const year = scenario.timeline.startYear + yearOffset;
+	const progress = progressForOffset(yearOffset, scenario.timeline.years);
 	return scenario.holdings.map((holding) => holding.weight({ year, progress }));
+}
+
+function progressForOffset(yearOffset: number, totalYears: number): number {
+	if (totalYears <= 1) {
+		return 0;
+	}
+
+	return yearOffset / (totalYears - 1);
+}
+
+function inferCapitalGainsTaxDisplay(scenario: Scenario, startYear: number, endYear: number): string {
+	const sampleGains = [1000, 10000, 100000];
+	const sampleContexts = [
+		{ year: startYear, progress: 0 },
+		{ year: Math.floor((startYear + endYear) / 2), progress: 0.5 },
+		{ year: endYear, progress: 1 },
+	];
+
+	let inferredRate: number | undefined;
+	for (const context of sampleContexts) {
+		for (const realizedGains of sampleGains) {
+			const tax = scenario.tax.longTermCapitalGainsTax({
+				year: context.year,
+				progress: context.progress,
+				realizedGains,
+			});
+
+			if (!Number.isFinite(tax) || tax < 0) {
+				return "CUSTOM";
+			}
+
+			const rate = tax / realizedGains;
+			if (!Number.isFinite(rate)) {
+				return "CUSTOM";
+			}
+
+			if (inferredRate === undefined) {
+				inferredRate = rate;
+				continue;
+			}
+
+			if (Math.abs(rate - inferredRate) > 0.000001) {
+				return "CUSTOM";
+			}
+		}
+	}
+
+	if (inferredRate === undefined) {
+		return "CUSTOM";
+	}
+
+	return formatPercent(inferredRate);
 }
 
 function describeRebalancePolicy(rebalanceEveryNYears: number): string {
@@ -446,7 +596,7 @@ function describeRebalancePolicy(rebalanceEveryNYears: number): string {
 	return `Every ${rebalanceEveryNYears} years`;
 }
 
-function formatCurrency(value: number): string {
+export function formatCurrency(value: number): string {
 	return new Intl.NumberFormat("en-US", {
 		style: "currency",
 		currency: "USD",

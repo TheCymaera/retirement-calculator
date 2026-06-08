@@ -63,13 +63,15 @@ export function cached<T extends (...args: any[]) => Promise<any>>(
 			const cachedTimestamp = Date.parse(row.fetchedAt);
 			const age = now.getTime() - cachedTimestamp;
 			
-			if (age < options.maxAge.milliseconds) {
+			if (age < options.maxAge.milliseconds) try {
 				const parsed = JSON.parse(row.payload);
 				return {
 					data: parsed as Awaited<ReturnType<T>>,
 					fetchedAt: new Date(cachedTimestamp),
 					isFresh: false
 				}
+			} catch(e) {
+				console.error(`Failed to load "${cacheKey}" from cache`);
 			}
 		}
 
