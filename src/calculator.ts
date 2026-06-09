@@ -24,13 +24,12 @@ export type ScenarioTimeline = {
 
 export type ScenarioTax = {
 	dividendTaxRate: number;
-	longTermCapitalGainsTax: (context: {
+	capitalGainsTax: (context: {
 		year: number;
 		progress: number;
 		realizedGains: number;
 	}) => number;
 	taxesPaidFromAccount: boolean;
-	assumeRebalanceSalesAreLongTerm: boolean;
 }
 
 export type Scenario = {
@@ -140,8 +139,7 @@ export function simulateScenario(scenario: Scenario): YearRow[] {
 			cumulativeCapitalGainsTaxes,
 			annualFees: annual.fees,
 			annualDividendTaxes: annual.dividendTaxes,
-			annualCapitalGainsTaxes:
-				annual.capitalGainsDistributionTaxes + annual.rebalanceCapitalGainsTaxes,
+			annualCapitalGainsTaxes: annual.capitalGainsDistributionTaxes + annual.rebalanceCapitalGainsTaxes,
 		});
 	}
 
@@ -189,22 +187,19 @@ function applyAnnualReturnsAndTaxes(
 		const annualReturn = security.annualReturn({ year, progress });
 		const dividendYield = security.dividendYield({ year, progress });
 		const dividendAmount = openingValue * dividendYield;
-		const capitalGainsDistributionAmount =
-			openingValue * security.capitalGainsDistributionYield;
-		const priceReturnRate =
-			annualReturn - dividendYield - security.capitalGainsDistributionYield;
+		const capitalGainsDistributionAmount = openingValue * security.capitalGainsDistributionYield;
+		const priceReturnRate = annualReturn - dividendYield - security.capitalGainsDistributionYield;
 		const priceAppreciationAmount = openingValue * priceReturnRate;
 		const estimatedFee = openingValue * (1 + annualReturn / 2) * security.expenseRatio;
 
 		const dividendTax = dividendAmount * scenario.tax.dividendTaxRate;
-		const capitalGainsDistributionTax = scenario.tax.longTermCapitalGainsTax({
+		const capitalGainsDistributionTax = scenario.tax.capitalGainsTax({
 			year,
 			progress,
 			realizedGains: capitalGainsDistributionAmount,
 		});
 
-		position.value +=
-			dividendAmount + capitalGainsDistributionAmount + priceAppreciationAmount;
+		position.value += dividendAmount + capitalGainsDistributionAmount + priceAppreciationAmount;
 
 		if (scenario.tax.taxesPaidFromAccount) {
 			position.value -= dividendTax + capitalGainsDistributionTax;
@@ -241,7 +236,7 @@ function applyEndOfHorizonCapitalGainsTaxes(
 			continue;
 		}
 
-		const tax = scenario.tax.longTermCapitalGainsTax({
+		const tax = scenario.tax.capitalGainsTax({
 			year,
 			progress,
 			realizedGains: unrealizedGain,
@@ -283,9 +278,8 @@ function rebalancePortfolio(
 
 		const sellAmount = position.value - targetValue;
 		const gainRatio = position.value <= 0 ? 0 : Math.max(0, (position.value - position.costBasis) / position.value);
-		const realizedGain = !scenario.tax.assumeRebalanceSalesAreLongTerm ? 0 :
-			(sellAmount * gainRatio);
-		const tax = scenario.tax.longTermCapitalGainsTax({
+		const realizedGain = sellAmount * gainRatio;
+		const tax = scenario.tax.capitalGainsTax({
 			year,
 			progress,
 			realizedGains: realizedGain,
@@ -344,31 +338,30 @@ export function printScenario(scenario: Scenario, rows: YearRow[]): void {
 }
 
 export function htmlScenarios(options: { scenario: Scenario, rows: YearRow[] }[]) {
-	const html = options.map(i => htmlScenario(i.scenario, i.rows));
-
 	const tabs = `<ul class="tabs">` + options.map((i, index) => `<li><a href="#scenario-${index}">${escapeHtml(i.scenario.name)}</a></li>`).join("") + `</ul>`;
 
 	const js = `<script>
 		const loadTab = () => {
 			const hash = window.location.hash;
-			const match = hash.match(/scenario-(\\d+)/);
-			if (!match) return;
-			const index = parseInt(match[1], 10);
+			const match = hash.match(/scenario-(\\d+)/) || [];
+			const index = match[1] ? parseInt(match[1], 10) : 0;
 			document.querySelectorAll('.scenario').forEach((el, i) => {
 				el.style.display = i === index ? 'block' : 'none';
 			});
 
 			
-			for (const anchor of document.querySelectorAll('a')) {
-				anchor.toggleAttribute("aria-current", anchor.href === location.href);
-			}
+			document.querySelectorAll('.tabs a').forEach((anchor, i) => {
+				anchor.toggleAttribute('aria-current', i === index);
+			});
 		};
 
 		addEventListener('hashchange', loadTab);
 		loadTab();
 	</script>`;
 
-	return `${htmlStyles}${tabs}<div>${options.map((i) => `<div class="scenario" style="display: none;">${htmlScenario(i.scenario, i.rows)}</div>`).join("")}</div>${js}`;
+	const sections = `<div>${options.map((i) => `<div class="scenario" style="display: none;">${htmlScenario(i.scenario, i.rows)}</div>`).join("")}</div>${js}`;
+
+	return `${htmlStyles}${tabs}${sections}`;
 }
 
 export function htmlScenario(scenario: Scenario, rows: YearRow[]): string {
@@ -501,7 +494,6 @@ function buildScenarioDetailLines(scenario: Scenario): string[] {
 		`Dividend tax rate: ${formatPercent(scenario.tax.dividendTaxRate)}`,
 		`Long-term capital gains tax: ${inferredCapitalGainsTax}`,
 		`Taxes paid from account: ${formatBoolean(scenario.tax.taxesPaidFromAccount)}`,
-		`Assume rebalance sales are long term: ${formatBoolean(scenario.tax.assumeRebalanceSalesAreLongTerm)}`,
 		`Rebalance policy: ${describeRebalancePolicy(scenario.timeline.rebalanceEveryNYears)}`,
 	];
 }
@@ -551,7 +543,7 @@ function inferCapitalGainsTaxDisplay(scenario: Scenario, startYear: number, endY
 	let inferredRate: number | undefined;
 	for (const context of sampleContexts) {
 		for (const realizedGains of sampleGains) {
-			const tax = scenario.tax.longTermCapitalGainsTax({
+			const tax = scenario.tax.capitalGainsTax({
 				year: context.year,
 				progress: context.progress,
 				realizedGains,

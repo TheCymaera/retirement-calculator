@@ -3,55 +3,18 @@ import { cached } from "./cache.js";
 import { Duration } from "./Duration.js";
 import YahooFinance from "yahoo-finance2";
 import type { QuoteSummaryResult } from "yahoo-finance2/modules/quoteSummary";
+import { createAusCapitalGainsTax, createFlatCapitalGainsTax } from "./tax.js";
 
 function lerp(start: number, end: number, t: number): number {
 	return start + t * (end - start);
-}
-
-function createFlatCapitalGainsTax(rate: number): Scenario["tax"]["longTermCapitalGainsTax"] {
-	return ({ realizedGains }) => realizedGains * rate;
-}
-
-function createAusCapitalGainsTax(isResident: boolean): Scenario["tax"]["longTermCapitalGainsTax"] {
-	return ({ realizedGains }) => {
-		let taxableGains = realizedGains;
-		if (isResident) {
-			taxableGains = realizedGains * 0.50;
-		}
-
-		let tax = 0;
-		if (isResident) {
-			if (taxableGains <= 18200) {
-				tax = 0;
-			} else if (taxableGains <= 45000) {
-				tax = (taxableGains - 18200) * 0.16;
-			} else if (taxableGains <= 135000) {
-				tax = 4288 + (taxableGains - 45000) * 0.30;
-			} else if (taxableGains <= 190000) {
-				tax = 31288 + (taxableGains - 135000) * 0.37;
-			} else {
-				tax = 51638 + (taxableGains - 190000) * 0.45;
-			}
-		} else {
-			if (taxableGains <= 135000) {
-				tax = taxableGains * 0.30;
-			} else if (taxableGains <= 190000) {
-				tax = 40500 + (taxableGains - 135000) * 0.37;
-			} else {
-				tax = 60850 + (taxableGains - 190000) * 0.45;
-			}
-		}
-
-		return tax;
-	};
 }
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 
 const securityOverrides: Record<string, Partial<Security>> = {
 	"VLXVX": {
-		annualReturn: ({ progress }) => lerp(0.08, 0.04, progress),
-		dividendYield: ({ progress }) => lerp(0.018, 0.03, progress),
+		annualReturn: ({ progress }) => lerp(0.1025, 0.04, progress),
+		dividendYield: ({ progress }) => lerp(0.018, 0.04, progress),
 	},
 };
 
@@ -74,29 +37,26 @@ const autoRebalanceTimeline = {
 // tax
 const hkWithUsDomiciledTax = {
 	dividendTaxRate: 0.30,
-	longTermCapitalGainsTax: createFlatCapitalGainsTax(0.0),
+	capitalGainsTax: createFlatCapitalGainsTax(0.0),
 	taxesPaidFromAccount: true,
-	assumeRebalanceSalesAreLongTerm: true,
 } satisfies Scenario["tax"];
 
 const ausWithUsDomiciledTax = {
 	dividendTaxRate: 0.15,
-	longTermCapitalGainsTax: createAusCapitalGainsTax(true),
+	capitalGainsTax: createAusCapitalGainsTax({ isResident: true }),
 	taxesPaidFromAccount: true,
-	assumeRebalanceSalesAreLongTerm: true,
 } satisfies Scenario["tax"];
 
 const hkWithIrelandDomiciledTax = {
-	dividendTaxRate: 0.0,
-	longTermCapitalGainsTax: createFlatCapitalGainsTax(0.0),
+	dividendTaxRate: 0.0, // 15% withholding already handled by fund
+	capitalGainsTax: createFlatCapitalGainsTax(0.0),
 	taxesPaidFromAccount: true,
-	assumeRebalanceSalesAreLongTerm: true,
 } satisfies Scenario["tax"];
 
 // scenarios
 const autoBalancingFundHK = {
 	name: "Auto-Rebalancing Target Fund via HK",
-	timeline,
+	timeline: autoRebalanceTimeline,
 	tax: hkWithUsDomiciledTax,
 	securities,
 	holdings: [
@@ -111,7 +71,7 @@ const autoBalancingFundAus = {
 } satisfies Scenario;
 
 const usDomiciledManualRebalanceHK = {
-	name: "US-Domiciled Portfolio With Manual Rebalance via HK",
+	name: "US-Domiciled Portfolio with Manual Rebalance via HK",
 	timeline,
 	tax: hkWithUsDomiciledTax,
 	securities,
@@ -124,7 +84,7 @@ const usDomiciledManualRebalanceHK = {
 } satisfies Scenario;
 
 const irelandDomiciledManualRebalanceHK = {
-	name: "Ireland-Domiciled Portfolio With Manual Rebalance via HK",
+	name: "Ireland-Domiciled Portfolio with Manual Rebalance via HK",
 	timeline,
 	tax: hkWithIrelandDomiciledTax,
 	securities,
@@ -217,8 +177,8 @@ const results = scenarios.map(scenario => {
 
 for (const { scenario, rows } of results) {
 	printScenario(scenario, rows);
-	//const html = htmlScenario(scenario, rows) + htmlStyles;
-	//await Bun.write(`./output/${scenario.name.replace(/\s+/g, "_")}.html`, html);
+	const html = htmlScenario(scenario, rows) + htmlStyles;
+	await Bun.write(`./output/${scenario.name.replace(/\s+/g, "_")}.html`, html);
 }
 
 console.group("Summary:")
