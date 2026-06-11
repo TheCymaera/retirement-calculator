@@ -1,6 +1,7 @@
-import { htmlScenario, htmlStyles, printScenario, simulateScenario, validateScenario, type Security, type Scenario, htmlScenarios, formatCurrency } from "./calculator.js";
-import { cached } from "./cache.js";
-import { Duration } from "./Duration.js";
+import { simulateScenario, validateScenario, type Security, type Scenario } from "./calculator.js";
+import { formatCurrency, htmlScenario, htmlScenarios, htmlStyles, printScenario } from "./presentation.js";
+import { cached } from "./utilities/cache.js";
+import { Duration } from "./utilities/Duration.js";
 import YahooFinance from "yahoo-finance2";
 import type { QuoteSummaryResult } from "yahoo-finance2/modules/quoteSummary";
 import { createAusCapitalGainsTax, createFlatCapitalGainsTax } from "./tax.js";
@@ -55,7 +56,7 @@ const hkWithIrelandDomiciledTax = {
 
 // scenarios
 const autoBalancingFundHK = {
-	name: "Auto-Rebalancing Target Fund via HK",
+	name: "Auto-Target Fund via HK",
 	timeline: autoRebalanceTimeline,
 	tax: hkWithUsDomiciledTax,
 	securities,
@@ -66,7 +67,7 @@ const autoBalancingFundHK = {
 
 const autoBalancingFundAus = {
 	...autoBalancingFundHK,
-	name: "Auto-Rebalancing Target Fund via Aus",
+	name: "Auto-Target Fund via Aus",
 	tax: ausWithUsDomiciledTax,
 } satisfies Scenario;
 
